@@ -1,0 +1,41 @@
+# Configuração do scanner de similaridade visual.
+# Caminhos relativos são resolvidos a partir da pasta deste arquivo.
+
+[camera]
+# Índice da webcam (0 = primeira), caminho de um vídeo ou de uma pasta de imagens.
+fonte = 0
+
+[captura]
+duracao_s = 5.0
+# n: frames amostrados ao longo da janela de captura.
+n_frames = 15
+# M: mínimo de frames válidos para o scan não falhar.
+min_frames_validos = 5
+# Lado do quadrado da moldura, como fração do menor lado do frame.
+moldura_fracao = 0.6
+
+[qualidade]
+# Variância do Laplaciano medida no frame redimensionado para 640 px de largura.
+nitidez_min = 25.0
+brilho_min = 40.0
+brilho_max = 220.0
+rosto_confianca_min = 0.8
+rosto_lado_min_px = 80
+
+[catalogo]
+diretorio_dados = "data"
+# k: frames guardados quando um scan vira item.
+imagens_por_item = 3
+
+[ranking]
+top = 10
+# Similaridade (%) do 1º colocado a partir da qual o scan é descartado.
+limiar_insercao = 90.0
+
+[calibracao]
+# Âncoras do mapeamento cosseno -> %. Valores provisórios; rode `python -m scanner calibrar`.
+cos_zero = 0.0
+cos_noventa = 0.7
+
+[modelos]
+diretorio = "models"

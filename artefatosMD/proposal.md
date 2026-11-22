@@ -15,6 +15,8 @@ Queremos um scanner visual que, em uma janela de 5 segundos, capture o que está
 - Seed manual do catálogo por script de linha de comando, a partir de pastas `seed/<item>/*.jpg`.
 - Tela de remoção de itens criados por scan na interface.
 - Adição manual de imagens pela interface: o usuário escolhe arquivos de imagem, que viram um novo item guardado da mesma forma que um item de scan (nome automático, mesma pasta de imagens, removível na interface), sem a regra dos 90% e sem pedido de consentimento.
+- Comparação de imagens com o catálogo, sem câmera: o usuário arrasta (ou escolhe) uma ou mais imagens de um mesmo objeto. O sistema descarta as de baixa qualidade, separa as que não se parecem com as demais (semelhança mínima configurável, padrão 50%), fica com o maior grupo de imagens semelhantes (em empate, o primeiro formado) e mostra o top 10 do catálogo, como no scan. Se o 1º colocado ficar abaixo de 90%, as imagens do grupo viram um novo item, sem pedido de consentimento.
+- Câmera opcional: o aplicativo funciona sem câmera ativa. Um detector lista os dispositivos de vídeo disponíveis, e a interface permite ativar, desativar e trocar a câmera, lembrando a última escolha. Funções que dependem da câmera (o scan) ficam bloqueadas sem ela.
 - Fora de escopo: busca de imagens no Google, validador de "rosto humano vs. objeto" na inserção, análise por característica facial e versão web.
 
 ## Capacidades
@@ -24,7 +26,9 @@ Queremos um scanner visual que, em uma janela de 5 segundos, capture o que está
 - `captura-scan`: janela de captura de 5 segundos, filtro de qualidade dos frames, recorte do sujeito e geração do vetor agregado do scan.
 - `ranking-similaridade`: busca no catálogo, agregação por item, % calibrada e top 10 com a imagem mais parecida de cada item.
 - `catalogo-itens`: armazenamento dos itens, seed manual, inserção dinâmica com a regra dos 90%, nomeação automática, consentimento e remoção.
-- `interface-scanner`: telas e fluxo do aplicativo desktop (espera, captura, resultados, consentimento, avisos e remoção).
+- `interface-scanner`: telas e fluxo do aplicativo desktop (espera, captura, resultados, consentimento, avisos, remoção, comparação de imagens e controle da câmera).
+- `comparacao-imagens`: busca no catálogo a partir de uma ou mais imagens de um mesmo objeto, com validação de qualidade, agrupamento por semelhança e inserção abaixo de 90%.
+- `camera-dispositivos`: detecção dos dispositivos de vídeo, ativação, desativação e troca da câmera, memória da última escolha e bloqueio das funções que exigem câmera.
 
 ### Capacidades modificadas
 

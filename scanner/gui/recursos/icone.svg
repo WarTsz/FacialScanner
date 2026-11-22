@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="cantos" gradientUnits="userSpaceOnUse" x1="60" y1="60" x2="196" y2="196">
+      <stop offset="0" stop-color="#5ce1e6"/>
+      <stop offset="1" stop-color="#ff79c6"/>
+    </linearGradient>
+    <linearGradient id="brilho" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5ce1e6" stop-opacity="0"/>
+      <stop offset="1" stop-color="#5ce1e6" stop-opacity="0.45"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#1e1f22"/>
+  <rect x="10" y="10" width="236" height="236" rx="54" fill="none" stroke="#3f4147" stroke-width="4"/>
+  <g fill="none" stroke="url(#cantos)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M60 106 V86 a26 26 0 0 1 26 -26 H106"/>
+    <path d="M150 60 H170 a26 26 0 0 1 26 26 V106"/>
+    <path d="M60 150 V170 a26 26 0 0 0 26 26 H106"/>
+    <path d="M150 196 H170 a26 26 0 0 0 26 -26 V150"/>
+  </g>
+  <rect x="74" y="92" width="108" height="42" fill="url(#brilho)"/>
+  <line x1="74" y1="134" x2="182" y2="134" stroke="#5ce1e6" stroke-width="9" stroke-linecap="round"/>
+</svg>

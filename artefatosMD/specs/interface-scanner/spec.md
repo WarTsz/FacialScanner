@@ -7,15 +7,19 @@ Interface gráfica desktop pela qual o usuário vê a câmera, faz scans, consul
 ## ADDED Requirements
 
 ### Requirement: Tela de espera com preview da câmera
-O aplicativo SHALL abrir em uma tela com o preview ao vivo da câmera e uma ação para iniciar o scan.
+O aplicativo SHALL abrir em uma tela com o preview ao vivo da câmera, os controles de câmera (lista de dispositivos, ativar/desativar e atualizar lista) e uma ação para iniciar o scan.
 
 #### Scenario: Abertura do aplicativo
-- **WHEN** o aplicativo é aberto com uma câmera disponível
-- **THEN** o preview ao vivo e a ação "Escanear" são exibidos
+- **WHEN** o aplicativo é aberto com a câmera ativa e disponível
+- **THEN** o preview ao vivo, os controles de câmera e a ação "Escanear" são exibidos
 
 #### Scenario: Câmera indisponível
 - **WHEN** o aplicativo é aberto sem câmera acessível
 - **THEN** uma mensagem informa que a câmera não foi encontrada e a ação "Escanear" fica desabilitada
+
+#### Scenario: Câmera desativada
+- **WHEN** o usuário desativa a câmera
+- **THEN** o preview mostra "Câmera desativada" e a ação "Escanear" fica desabilitada
 
 ### Requirement: Feedback durante a captura
 Durante a janela de 5 segundos, a interface SHALL manter o preview da câmera, mostrar uma moldura indicando onde posicionar o sujeito e exibir o progresso ou o tempo restante. Não SHALL ser possível iniciar outro scan enquanto um estiver em andamento.
@@ -85,6 +89,33 @@ A tela de espera SHALL oferecer a ação "Adicionar imagens", que abre um seleto
 #### Scenario: Sem câmera
 - **WHEN** o aplicativo está aberto sem câmera acessível
 - **THEN** a ação "Adicionar imagens" continua disponível, embora "Escanear" fique desabilitada
+
+### Requirement: Tela de comparação de imagens
+A tela de espera SHALL oferecer a ação "Comparar imagens", disponível sem câmera, que abre uma tela onde o usuário arrasta imagens ou as escolhe por um seletor com seleção múltipla, vê as miniaturas e clica em "Comparar". O ranking SHALL aparecer na tela de resultados, com um resumo das imagens usadas e descartadas e o aviso de inserção quando houver.
+
+#### Scenario: Abrir sem câmera
+- **WHEN** o aplicativo está aberto sem câmera ativa
+- **THEN** a ação "Comparar imagens" continua disponível e abre a tela de comparação
+
+#### Scenario: Arrastar imagens
+- **WHEN** o usuário arrasta arquivos de imagem para a tela de comparação
+- **THEN** as imagens aparecem como miniaturas e arquivos que não são imagem são ignorados
+
+#### Scenario: Comparar habilitado
+- **WHEN** nenhuma imagem foi escolhida
+- **THEN** a ação "Comparar" fica desabilitada, e é habilitada quando houver ao menos uma imagem
+
+#### Scenario: Resultado
+- **WHEN** o usuário clica em "Comparar"
+- **THEN** a interface mostra um indicador de processamento e depois a tela de resultados com o ranking, o resumo das imagens usadas e descartadas e, se as imagens viraram item, o aviso de inserção
+
+#### Scenario: Nenhuma imagem válida
+- **WHEN** nenhuma imagem escolhida é válida
+- **THEN** a interface continua na tela de comparação e mostra o motivo de cada imagem descartada
+
+#### Scenario: Voltar
+- **WHEN** o usuário clica em "Voltar" na tela de comparação
+- **THEN** a interface volta para a tela de espera
 
 ### Requirement: Interface responsiva durante o processamento
 A interface MUST NOT travar durante a captura, a geração dos vetores ou a busca. O preview e as animações de progresso SHALL continuar atualizando.

@@ -13,6 +13,7 @@ CAMINHO_PADRAO = Path("config.toml")
 @dataclass
 class CameraCfg:
     fonte: int | str = 0
+    ativa: bool = True
 
 
 @dataclass
@@ -45,6 +46,11 @@ class RankingCfg:
 
 
 @dataclass
+class ComparacaoCfg:
+    similaridade_minima: float = 50.0
+
+
+@dataclass
 class CalibracaoCfg:
     cos_zero: float = 0.0
     cos_noventa: float = 0.7
@@ -63,6 +69,7 @@ class Config:
     catalogo: CatalogoCfg = field(default_factory=CatalogoCfg)
     ranking: RankingCfg = field(default_factory=RankingCfg)
     calibracao: CalibracaoCfg = field(default_factory=CalibracaoCfg)
+    comparacao: ComparacaoCfg = field(default_factory=ComparacaoCfg)
     modelos: ModelosCfg = field(default_factory=ModelosCfg)
     caminho: Path | None = None
 
@@ -104,22 +111,42 @@ def carregar_config(caminho: Path | str | None = None) -> Config:
     return cfg
 
 
-def atualizar_calibracao(caminho: Path, cos_zero: float, cos_noventa: float) -> None:
-    """Grava as âncoras na seção [calibracao], preservando o resto do arquivo."""
-    texto = caminho.read_text(encoding="utf-8") if caminho.exists() else ""
-    novos = {"cos_zero": cos_zero, "cos_noventa": cos_noventa}
+def _valor_toml(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, float):
+        return f"{v:.4f}"
+    if isinstance(v, int):
+        return str(v)
+    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-    secao = re.search(r"^\[calibracao\][^\n]*\n(.*?)(?=^\[|\Z)", texto, re.S | re.M)
-    if not secao:
-        bloco = "\n[calibracao]\n" + "".join(f"{k} = {v:.4f}\n" for k, v in novos.items())
+
+def atualizar_secao(caminho: Path, secao: str, valores: dict) -> None:
+    """Grava chaves em uma seção do config.toml, preservando o resto do arquivo."""
+    caminho = Path(caminho)
+    texto = caminho.read_text(encoding="utf-8") if caminho.exists() else ""
+    linhas = {k: f"{k} = {_valor_toml(v)}" for k, v in valores.items()}
+
+    achada = re.search(rf"^\[{re.escape(secao)}\][^\n]*\n(.*?)(?=^\[|\Z)", texto, re.S | re.M)
+    if not achada:
+        bloco = f"\n[{secao}]\n" + "".join(l + "\n" for l in linhas.values())
         caminho.write_text(texto.rstrip("\n") + "\n" + bloco, encoding="utf-8")
         return
 
-    corpo = secao.group(1)
-    for chave, valor in novos.items():
-        linha = f"{chave} = {valor:.4f}"
-        corpo, n = re.subn(rf"^{chave}\s*=.*$", linha, corpo, flags=re.M)
+    corpo = achada.group(1)
+    for chave, linha in linhas.items():
+        corpo, n = re.subn(rf"^{re.escape(chave)}\s*=.*$", lambda _m, l=linha: l, corpo, flags=re.M)
         if n == 0:
             corpo = corpo.rstrip("\n") + f"\n{linha}\n"
-    texto = texto[: secao.start(1)] + corpo + texto[secao.end(1) :]
+    texto = texto[: achada.start(1)] + corpo + texto[achada.end(1) :]
     caminho.write_text(texto, encoding="utf-8")
+
+
+def atualizar_calibracao(caminho: Path, cos_zero: float, cos_noventa: float) -> None:
+    """Grava as âncoras na seção [calibracao], preservando o resto do arquivo."""
+    atualizar_secao(caminho, "calibracao", {"cos_zero": float(cos_zero), "cos_noventa": float(cos_noventa)})
+
+
+def atualizar_camera(caminho: Path, fonte: int | str, ativa: bool) -> None:
+    """Grava a câmera escolhida e se ela está ativa na seção [camera]."""
+    atualizar_secao(caminho, "camera", {"fonte": fonte, "ativa": bool(ativa)})

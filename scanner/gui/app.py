@@ -20,12 +20,16 @@ from PySide6.QtWidgets import (
 )
 
 from scanner.captura import EXTENSOES_IMAGEM, instantes_amostragem
-from scanner.config import Config, carregar_config
+from scanner.config import Config, atualizar_camera, carregar_config
+from scanner.dispositivos import Dispositivo, listar_dispositivos
 from scanner.gui.camera import ThreadCamera
 from scanner.gui.telas import (
     DICA_FALHA,
     DialogoConsentimento,
+    mensagem_sem_validas,
+    resumo_busca,
     TelaCamera,
+    TelaComparacao,
     TelaRemocao,
     TelaResultados,
 )
@@ -48,6 +52,8 @@ class Estado(Enum):
     CAPTURANDO = auto()
     PROCESSANDO = auto()
     ADICIONANDO = auto()
+    COMPARACAO = auto()
+    COMPARANDO = auto()
     RESULTADOS = auto()
     REMOCAO = auto()
 
@@ -58,6 +64,8 @@ _STATUS = {
     Estado.CAPTURANDO: ("Capturando", "rosa"),
     Estado.PROCESSANDO: ("Processando", "rosa"),
     Estado.ADICIONANDO: ("Adicionando imagens", "rosa"),
+    Estado.COMPARACAO: ("Comparar imagens", "ciano"),
+    Estado.COMPARANDO: ("Comparando", "rosa"),
     Estado.RESULTADOS: ("Resultados", "ciano"),
     Estado.REMOCAO: ("Gerenciando itens", "texto_mudo"),
 }
@@ -93,16 +101,26 @@ class JanelaPrincipal(QMainWindow):
     _pedir_inserir = Signal(object)
     _pedir_descartar = Signal(object)
     _pedir_adicionar = Signal(object)
+    _pedir_comparar = Signal(object)
     _pedir_encerrar = Signal()
 
-    def __init__(self, cfg: Config, fonte, fabrica_motor=Motor.criar):
+    def __init__(
+        self,
+        cfg: Config,
+        fonte,
+        fabrica_motor=Motor.criar,
+        listar=listar_dispositivos,
+        salvar_camera: bool = False,
+    ):
         super().__init__()
         self.cfg = cfg
         self.setWindowTitle("Scanner de similaridade visual")
         self.resize(1040, 780)
         self.estado = Estado.CARREGANDO
         self.motor_pronto = False
-        self.camera_ok = True
+        self.camera_ok = False  # há uma câmera ativa entregando frames?
+        self.camera: ThreadCamera | None = None
+        self.dispositivos: list[Dispositivo] = []
         self._erro_status: str | None = None
         self.resultado_atual = None
         self.dialogo_consentimento: DialogoConsentimento | None = None
@@ -113,8 +131,9 @@ class JanelaPrincipal(QMainWindow):
         self.tela_camera = TelaCamera(cfg.captura.moldura_fracao)
         self.tela_resultados = TelaResultados()
         self.tela_remocao = TelaRemocao()
+        self.tela_comparacao = TelaComparacao()
         self.pilha = QStackedWidget()
-        for tela in (self.tela_camera, self.tela_resultados, self.tela_remocao):
+        for tela in (self.tela_camera, self.tela_resultados, self.tela_remocao, self.tela_comparacao):
             self.pilha.addWidget(tela)
         self.pilha.currentChanged.connect(self._atualizar_secao)
         self._montar_moldura_da_janela()
@@ -122,9 +141,13 @@ class JanelaPrincipal(QMainWindow):
         self.tela_camera.escanear.connect(self._iniciar_scan)
         self.tela_camera.gerenciar.connect(self._abrir_remocao)
         self.tela_camera.adicionar.connect(self._abrir_adicao)
-        self.tela_resultados.novo_scan.connect(self._voltar_camera)
+        self.tela_resultados.novo_scan.connect(self._depois_dos_resultados)
         self.tela_remocao.voltar.connect(self._voltar_camera)
         self.tela_remocao.remover.connect(self._remover)
+        self.tela_camera.comparar.connect(self._abrir_comparacao)
+        self.tela_comparacao.escolher.connect(self._escolher_imagens_comparacao)
+        self.tela_comparacao.comparar.connect(self._comparar)
+        self.tela_comparacao.voltar.connect(self._voltar_camera)
 
         # Trabalhador: thread única para modelos, busca e catálogo.
         self._thread_trab = QThread(self)
@@ -137,6 +160,7 @@ class JanelaPrincipal(QMainWindow):
         self._pedir_inserir.connect(self.trabalhador.inserir)
         self._pedir_descartar.connect(self.trabalhador.descartar)
         self._pedir_adicionar.connect(self.trabalhador.adicionar_imagens)
+        self._pedir_comparar.connect(self.trabalhador.comparar)
         self._pedir_encerrar.connect(self.trabalhador.encerrar)
         self.trabalhador.pronto.connect(self._motor_pronto)
         self.trabalhador.erro_fatal.connect(self._motor_falhou)
@@ -144,15 +168,33 @@ class JanelaPrincipal(QMainWindow):
         self.trabalhador.falhou.connect(self._scan_falhou)
         self.trabalhador.inserido.connect(self._inserido)
         self.trabalhador.adicionado.connect(self._imagens_adicionadas)
+        self.trabalhador.comparado.connect(self._comparado)
         self.trabalhador.erro.connect(self._erro)
         self._thread_trab.start()
         self._pedir_iniciar.emit()
 
-        # Câmera.
-        self.camera = ThreadCamera(fonte, parent=self)
-        self.camera.frame_pronto.connect(self._frame)
-        self.camera.indisponivel.connect(self._sem_camera)
-        self.camera.start()
+        # Câmera: opcional, escolhida entre os dispositivos detectados.
+        self._listar = listar
+        self._salvar_camera = salvar_camera
+        if isinstance(fonte, str) and fonte.isdigit():
+            fonte = int(fonte)
+        self.fonte_atual = fonte
+        # Vídeo ou pasta de imagens (--camera) entra na lista como uma opção a mais.
+        self._fonte_extra = None if isinstance(fonte, int) else fonte
+        self.camera_ativa = bool(cfg.camera.ativa)
+        self.tela_camera.camera_escolhida.connect(self._escolher_camera)
+        self.tela_camera.alternar_camera.connect(self._alternar_camera)
+        self.tela_camera.atualizar_cameras.connect(self._atualizar_cameras)
+        self._recarregar_dispositivos()
+        if not self.camera_ativa:
+            self.tela_camera.camera_desativada()
+        elif self.fonte_atual not in [d.fonte for d in self.dispositivos]:
+            self.camera_ativa = False  # dispositivo guardado ausente: abre desativada
+            self._erro_status = "Sem câmera"
+            self.tela_camera.sem_camera(f"Câmera não encontrada ({self.fonte_atual})")
+        else:
+            self._ligar_camera()
+        self._mostrar_dispositivos()
 
         self._relogio = QElapsedTimer()
         self._tique = QTimer(self)
@@ -204,6 +246,7 @@ class JanelaPrincipal(QMainWindow):
             self.tela_camera: "# câmera",
             self.tela_resultados: "# resultados",
             self.tela_remocao: "# gerenciar-itens",
+            self.tela_comparacao: "# comparar-imagens",
         }
         self.rotulo_secao.setText(nomes.get(self.pilha.currentWidget(), ""))
 
@@ -227,9 +270,17 @@ class JanelaPrincipal(QMainWindow):
 
     def _atualizar_botoes(self) -> None:
         livre = self.estado == Estado.PRONTO and self.motor_pronto
-        self.tela_camera.botao_escanear.setEnabled(livre and self.camera_ok)
+        self.tela_camera.botao_escanear.setEnabled(
+            livre and self.camera_ok and self.camera is not None
+        )
+        controles = self._controles_camera_livres()
+        tem_dispositivo = bool(self.dispositivos)
+        self.tela_camera.lista_cameras.setEnabled(controles and tem_dispositivo)
+        self.tela_camera.botao_camera.setEnabled(controles and tem_dispositivo)
+        self.tela_camera.botao_atualizar.setEnabled(controles)
         self.tela_camera.botao_gerenciar.setEnabled(livre)
         self.tela_camera.botao_adicionar.setEnabled(livre)  # não depende da câmera
+        self.tela_camera.botao_comparar.setEnabled(livre)  # não depende da câmera
 
     def _mudar(self, estado: Estado) -> None:
         self.estado = estado
@@ -247,16 +298,115 @@ class JanelaPrincipal(QMainWindow):
         self._erro_status = "Erro ao iniciar"
         self._mudar(Estado.CARREGANDO)
 
-    def _sem_camera(self, motivo: str) -> None:
-        self.camera_ok = False
-        self._erro_status = "Sem câmera"
-        self.tela_camera.sem_camera(motivo)
+    def _sem_camera(self, motivo: str, cam=None) -> None:
+        if cam is not None and cam is not self.camera:
+            return  # aviso de uma câmera que já foi trocada ou desligada
         if self.estado == Estado.CAPTURANDO:
             self._cancelar_captura()
-        self._atualizar_botoes()
+        self._desligar_camera()
+        self.camera_ativa = False  # o dispositivo não abre: a câmera fica desativada
+        self._erro_status = "Sem câmera"
+        self.tela_camera.sem_camera(motivo)
+        self._mostrar_dispositivos()
         self._atualizar_status()
 
-    def _frame(self, img) -> None:
+    # ------------------------------------------------------------- câmera
+
+    def _controles_camera_livres(self) -> bool:
+        return self.estado in (Estado.PRONTO, Estado.CARREGANDO)
+
+    def _recarregar_dispositivos(self) -> None:
+        lista = list(self._listar())
+        if self._fonte_extra is not None and self._fonte_extra not in [d.fonte for d in lista]:
+            nome = Path(str(self._fonte_extra)).name or str(self._fonte_extra)
+            lista.append(Dispositivo(self._fonte_extra, f"Arquivo: {nome}"))
+        # A câmera em uso sempre fica na lista (a sondagem pode não abrir uma câmera ocupada).
+        if self.camera is not None and self.fonte_atual not in [d.fonte for d in lista]:
+            lista.insert(0, Dispositivo(self.fonte_atual, f"Câmera {self.fonte_atual}"))
+        self.dispositivos = lista
+
+    def _mostrar_dispositivos(self) -> None:
+        self.tela_camera.mostrar_dispositivos(self.dispositivos, self.fonte_atual, self.camera_ativa)
+        self._atualizar_botoes()
+
+    def _ligar_camera(self) -> None:
+        cam = ThreadCamera(self.fonte_atual, parent=self)
+        cam.frame_pronto.connect(lambda img, c=cam: self._frame(img, c))
+        cam.indisponivel.connect(lambda motivo, c=cam: self._sem_camera(motivo, c))
+        self.camera = cam
+        self.camera_ok = True
+        self._erro_status = None
+        cam.start()
+
+    def _desligar_camera(self) -> None:
+        cam, self.camera = self.camera, None
+        self.camera_ok = False
+        if cam is not None:
+            cam.parar()
+            cam.deleteLater()
+
+    def _guardar_camera(self) -> None:
+        if self._salvar_camera and isinstance(self.fonte_atual, int) and self.cfg.caminho:
+            atualizar_camera(self.cfg.caminho, self.fonte_atual, self.camera_ativa)
+
+    def _mensagem_camera_ligada(self) -> None:
+        self.tela_camera.info(MSG_PRONTO if self.motor_pronto else "Carregando modelos…")
+
+    def _alternar_camera(self) -> None:
+        if not self._controles_camera_livres():
+            return
+        if self.camera_ativa:
+            self._desligar_camera()
+            self.camera_ativa = False
+            self._erro_status = None
+            self.tela_camera.camera_desativada()
+        else:
+            if not self.dispositivos:
+                return
+            if self.fonte_atual not in [d.fonte for d in self.dispositivos]:
+                self.fonte_atual = self.dispositivos[0].fonte
+            self.camera_ativa = True
+            self._ligar_camera()
+            self._mensagem_camera_ligada()
+        self._guardar_camera()
+        self._mostrar_dispositivos()
+        self._atualizar_status()
+
+    def _escolher_camera(self, posicao: int) -> None:
+        if not self._controles_camera_livres() or not 0 <= posicao < len(self.dispositivos):
+            return
+        fonte = self.dispositivos[posicao].fonte
+        if fonte == self.fonte_atual:
+            return
+        self.fonte_atual = fonte
+        if self.camera_ativa:
+            self._desligar_camera()
+            self._ligar_camera()
+            self._mensagem_camera_ligada()
+        self._guardar_camera()
+        self._mostrar_dispositivos()
+        self._atualizar_status()
+
+    def _atualizar_cameras(self) -> None:
+        if not self._controles_camera_livres():
+            return
+        self._recarregar_dispositivos()
+        fontes = [d.fonte for d in self.dispositivos]
+        if self.camera is None and self.fonte_atual not in fontes and fontes:
+            self.fonte_atual = fontes[0]
+        if self.camera is None and fontes:
+            self._erro_status = None
+            n = len(fontes)
+            self.tela_camera.info(
+                f"{n} câmera{'' if n == 1 else 's'} encontrada{'' if n == 1 else 's'}. "
+                "Escolha na lista e clique em “Ativar” para usar."
+            )
+        self._mostrar_dispositivos()
+        self._atualizar_status()
+
+    def _frame(self, img, cam=None) -> None:
+        if cam is not None and cam is not self.camera:
+            return  # frame atrasado de uma câmera já trocada
         if self.pilha.currentWidget() is self.tela_camera:
             self.tela_camera.preview.mostrar(img)
         if self._amostras_pendentes and self.estado == Estado.CAPTURANDO:
@@ -266,7 +416,7 @@ class JanelaPrincipal(QMainWindow):
     # ---------------------------------------------------------------- captura
 
     def _iniciar_scan(self) -> None:
-        if self.estado != Estado.PRONTO or not (self.motor_pronto and self.camera_ok):
+        if self.estado != Estado.PRONTO or not (self.motor_pronto and self.camera_ok and self.camera):
             return
         self._mudar(Estado.CAPTURANDO)
         self.tela_camera.preview.set_capturando(True)
@@ -343,7 +493,11 @@ class JanelaPrincipal(QMainWindow):
         self._mudar(Estado.PRONTO)
 
     def _erro(self, msg: str) -> None:
-        if self.estado in (Estado.PROCESSANDO, Estado.ADICIONANDO):
+        if self.estado == Estado.COMPARANDO:
+            self.tela_comparacao.ocioso()
+            self.tela_comparacao.info(msg, erro=True)
+            self._mudar(Estado.COMPARACAO)
+        elif self.estado in (Estado.PROCESSANDO, Estado.ADICIONANDO):
             self.tela_camera.ocioso()
             self.tela_camera.info(msg, erro=True)
             self._mudar(Estado.PRONTO)
@@ -354,6 +508,7 @@ class JanelaPrincipal(QMainWindow):
         self.resultado_atual = resultado
         self.tela_camera.ocioso()
         self.tela_resultados.mostrar(resultado.resultados)
+        self.tela_resultados.definir_origem("scan")
         self.pilha.setCurrentWidget(self.tela_resultados)
         self._mudar(Estado.RESULTADOS)
         scan = resultado.scan
@@ -373,11 +528,22 @@ class JanelaPrincipal(QMainWindow):
         self.tela_resultados.avisar(MSG_INSERIDO)
         self._atualizar_status()
 
+    def _depois_dos_resultados(self) -> None:
+        if self.tela_resultados.origem == "comparacao":
+            self.resultado_atual = None
+            self.tela_comparacao.limpar()
+            self.pilha.setCurrentWidget(self.tela_comparacao)
+            self._mudar(Estado.COMPARACAO)
+        else:
+            self._voltar_camera()
+
     def _voltar_camera(self) -> None:
         self.resultado_atual = None
         self.pilha.setCurrentWidget(self.tela_camera)
         if self.camera_ok:
             self.tela_camera.info(MSG_PRONTO)
+        elif not self.camera_ativa and self._erro_status is None:
+            self.tela_camera.camera_desativada()
         self._mudar(Estado.PRONTO)
 
     # ------------------------------------------------------- adição manual
@@ -405,6 +571,50 @@ class JanelaPrincipal(QMainWindow):
         self.tela_camera.info(texto, erro=erro)
         self._mudar(Estado.PRONTO)
 
+    # ------------------------------------------------- comparação de imagens
+
+    def _abrir_comparacao(self) -> None:
+        if self.estado != Estado.PRONTO or not self.motor_pronto:
+            return
+        self.tela_comparacao.limpar()
+        self.pilha.setCurrentWidget(self.tela_comparacao)
+        self._mudar(Estado.COMPARACAO)
+
+    def _escolher_arquivos_comparacao(self) -> list[str]:
+        caminhos, _ = QFileDialog.getOpenFileNames(
+            self, "Imagens de um mesmo objeto", str(Path.home()), FILTRO_IMAGENS
+        )
+        return caminhos
+
+    def _escolher_imagens_comparacao(self) -> None:
+        if self.estado != Estado.COMPARACAO:
+            return
+        caminhos = self._escolher_arquivos_comparacao()
+        if caminhos:
+            self.tela_comparacao.adicionar(caminhos)
+
+    def _comparar(self) -> None:
+        tela = self.tela_comparacao
+        if self.estado != Estado.COMPARACAO or not tela.caminhos:
+            return
+        self._mudar(Estado.COMPARANDO)
+        tela.processando()
+        self._pedir_comparar.emit(list(tela.caminhos))
+
+    def _comparado(self, r) -> None:
+        self.tela_comparacao.ocioso()
+        if not r.valido:
+            self.tela_comparacao.info(mensagem_sem_validas(r), erro=True)
+            self._mudar(Estado.COMPARACAO)
+            return
+        self.resultado_atual = r
+        self.tela_resultados.mostrar(r.resultados)
+        self.tela_resultados.definir_origem("comparacao", resumo_busca(r))
+        if r.item is not None:
+            self.tela_resultados.avisar(MSG_INSERIDO)
+        self.pilha.setCurrentWidget(self.tela_resultados)
+        self._mudar(Estado.RESULTADOS)
+
     # ---------------------------------------------------------------- remoção
 
     def _abrir_remocao(self) -> None:
@@ -425,7 +635,7 @@ class JanelaPrincipal(QMainWindow):
         self._tique.stop()
         for t in self._timers_amostra:
             t.stop()
-        self.camera.parar()
+        self._desligar_camera()
         self._pedir_encerrar.emit()
         self._thread_trab.quit()
         self._thread_trab.wait(5000)
@@ -435,8 +645,11 @@ class JanelaPrincipal(QMainWindow):
 def executar(caminho_config: Path | None, camera=None) -> int:
     cfg = carregar_config(caminho_config)
     fonte = camera if camera is not None else cfg.camera.fonte
+    # Nome usado pelo sistema para identificar a janela no painel (WM_CLASS / app id).
+    QApplication.setApplicationName("Scanner")
+    QApplication.setDesktopFileName("scanner-similaridade")
     app = QApplication.instance() or QApplication(sys.argv)
     aplicar_tema(app)
-    janela = JanelaPrincipal(cfg, fonte)
+    janela = JanelaPrincipal(cfg, fonte, salvar_camera=True)
     janela.show()
     return app.exec()

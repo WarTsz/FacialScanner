@@ -23,6 +23,7 @@ class Trabalhador(QObject):
     falhou = Signal(object)  # FalhaScan
     inserido = Signal(object)  # Item
     adicionado = Signal(object)  # ResultadoAdicao
+    comparado = Signal(object)  # ResultadoBuscaImagens
     erro = Signal(str)
 
     def __init__(self, cfg, fabrica_motor=Motor.criar):
@@ -82,6 +83,14 @@ class Trabalhador(QObject):
         except Exception as exc:
             log.exception("falha ao adicionar imagens")
             self.erro.emit(f"Não foi possível adicionar as imagens: {exc}")
+
+    @Slot(object)
+    def comparar(self, caminhos) -> None:
+        try:
+            self.comparado.emit(self.motor.buscar_por_imagens(caminhos))
+        except Exception as exc:
+            log.exception("falha ao comparar imagens")
+            self.erro.emit(f"Não foi possível comparar as imagens: {exc}")
 
     @Slot(object)
     def descartar(self, scan) -> None:

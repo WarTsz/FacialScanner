@@ -54,6 +54,22 @@
 - [x] 7.2 Implementar na tela de espera o botão "Adicionar imagens" (seletor de arquivos com seleção múltipla, processamento no worker com indicador, mensagem com adicionadas e ignoradas, disponível sem câmera), e verificar com testes da interface a adição, a falha sem imagens válidas, o seletor cancelado e o botão habilitado sem câmera
 - [x] 7.3 Documentar a adição de imagens no `README.md` e rodar `openspec validate scanner-similaridade-visual --strict`
 
-## Workflow follow-up
+## 8. Comparação de imagens com o catálogo
+
+- [x] 8.1 Implementar o agrupamento por semelhança mínima (líder com centroide, mínimo configurável em `[comparacao] similaridade_minima`, padrão 50%) e a escolha do grupo (maior; em empate, o primeiro formado), e verificar com testes: imagens semelhantes em um grupo, imagem diferente separada, maior grupo vence, empate resolvido pelo primeiro grupo e mínimo configurável
+- [x] 8.2 Implementar no motor a busca no catálogo a partir de imagens (pipeline da adição manual, descarte por qualidade, agrupamento, top 10, inserção do grupo abaixo de 90% sem consentimento, nada gravado com 90% ou mais, resumo), substituindo a comparação A × B, e verificar com testes: uma imagem, várias imagens, imagem borrada, imagem diferente descartada, nenhuma válida, objeto novo inserido, objeto já catalogado sem gravação e rosto sem consentimento
+- [x] 8.3 Refazer a tela "Comparar imagens" (área para arrastar imagens, seletor com seleção múltipla, miniaturas, "Comparar" habilitado com ao menos uma imagem, processamento no worker, ranking na tela de resultados com resumo e aviso de inserção, mensagem quando nada é válido, "Voltar"), e verificar com testes da interface: arrastar imagens, habilitação, resultado com resumo e inserção, nenhuma válida e volta
+
+## 9. Câmera opcional e dispositivos
+
+- [x] 9.1 Implementar o detector de dispositivos de vídeo (sysfs no Linux com nome e filtro de nós de captura; sondagem de índices nos demais sistemas) e a gravação de `[camera] fonte` e `ativa` no `config.toml`, e verificar com testes: nó de metadados ignorado, nomes, lista vazia e gravação preservando o resto do arquivo
+- [x] 9.2 Implementar na tela de espera os controles de câmera (lista de dispositivos, Ativar/Desativar, Atualizar lista), a troca de dispositivo, o bloqueio do "Escanear" sem câmera ativa, os controles desabilitados durante o scan e a abertura com a última escolha, e verificar com testes da interface: desativar e ativar, troca, dispositivo que não abre, funções sem câmera, controles durante o scan e reabertura com a escolha guardada
+
+## 10. Documentação e verificação
+
+- [x] 10.1 Atualizar o `README.md`, a documentação do projeto (`Documentacao.odt` e `Documentacao.html`) e a cópia `artefatosMD/`, e verificar que os passos descritos funcionam
+- [x] 10.2 Rodar a suíte completa de testes e `openspec validate artefatosMarkDown --strict`, e verificar que ambos passam
+
+## Workflow follow-up## Workflow follow-up
 
 - Arquivar a change com `/opsx:archive` depois que a implementação for revisada.

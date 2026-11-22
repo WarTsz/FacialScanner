@@ -98,12 +98,12 @@ def abrir(qtbot, qapp, processador):
     aplicar_tema(qapp)
     janelas = []
 
-    def _abrir(cfg, fonte, esperar_pronto=True):
+    def _abrir(cfg, fonte, esperar_pronto=True, **opcoes):
         def fabrica(c):
             cat = Catalogo(c.catalogo.diretorio_dados)
             return Motor(c, processador, cat, Indice.carregar(cat))
 
-        j = JanelaPrincipal(cfg, fonte, fabrica)
+        j = JanelaPrincipal(cfg, fonte, fabrica, **opcoes)
         qtbot.addWidget(j)
         j.show()
         janelas.append(j)
@@ -459,3 +459,283 @@ def test_adicionar_imagens_disponivel_sem_camera(qtbot, abrir, cfg, tmp_path):
     qtbot.waitUntil(lambda: j.estado == Estado.PRONTO, timeout=TIMEOUT)
     assert len(_itens(cfg, "scan")) == 1
     assert not j.tela_camera.botao_escanear.isEnabled()  # continua sem câmera
+
+
+# --- ícone do aplicativo ---
+
+
+def test_icone_do_aplicativo(qtbot, abrir, cfg, fonte_objeto):
+    from scanner.gui.tema import TAMANHOS_ICONE, icone_app
+
+    icone = icone_app()
+    assert not icone.isNull()
+    tamanhos = {s.width() for s in icone.availableSizes()}
+    assert set(TAMANHOS_ICONE) <= tamanhos
+    j = abrir(cfg, fonte_objeto)
+    assert not j.windowIcon().isNull()
+    assert {s.width() for s in j.windowIcon().availableSizes()} >= {16, 256}
+
+
+# --- 8.3 comparação de imagens com o catálogo ---
+
+
+def _imagens_comparacao(tmp_path):
+    from tests.seed_exemplo import sequencia_camera
+
+    canecas = _arquivos(tmp_path, "cmp-caneca", sequencia_camera(ler("coffee.png"), 3, semente=1))
+    foguete = _arquivos(tmp_path, "cmp-foguete", [ler("rocket.jpg")])
+    borrada = _arquivos(tmp_path, "cmp-borrada", [cv2.GaussianBlur(ler("coffee.png"), (31, 31), 0)])
+    return canecas, foguete[0], borrada[0]
+
+
+def _abrir_comparacao(qtbot, j, caminhos=None):
+    if caminhos is not None:
+        j._escolher_arquivos_comparacao = lambda: caminhos  # no lugar do QFileDialog
+    qtbot.mouseClick(j.tela_camera.botao_comparar, Qt.MouseButton.LeftButton)
+    assert j.pilha.currentWidget() is j.tela_comparacao
+    assert j.estado == Estado.COMPARACAO
+
+
+def _soltar(area, caminhos):
+    from PySide6.QtCore import QMimeData, QPointF, QUrl
+    from PySide6.QtGui import QDropEvent
+
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(c)) for c in caminhos])
+    evento = QDropEvent(
+        QPointF(20, 20), Qt.DropAction.CopyAction, mime, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier
+    )
+    area.dropEvent(evento)
+
+
+def test_comparar_imagens_disponivel_sem_camera(qtbot, abrir, cfg):
+    j = abrir(cfg, 99, esperar_pronto=False)
+    qtbot.waitUntil(lambda: j.motor_pronto and not j.camera_ok, timeout=TIMEOUT)
+    assert not j.tela_camera.botao_escanear.isEnabled()
+    assert j.tela_camera.botao_comparar.isEnabled()
+    _abrir_comparacao(qtbot, j)
+
+
+def test_arrastar_imagens_e_habilitar_comparar(qtbot, abrir, cfg, fonte_objeto, tmp_path):
+    canecas, foguete, _ = _imagens_comparacao(tmp_path)
+    texto = tmp_path / "notas.txt"
+    texto.write_text("x")
+    j = abrir(cfg, fonte_objeto)
+    _abrir_comparacao(qtbot, j, [str(foguete)])
+    tela = j.tela_comparacao
+    assert not tela.botao_comparar.isEnabled()
+
+    _soltar(tela.area, [*canecas[:2], texto])
+    assert tela.area.miniaturas.count() == 2
+    assert "1 arquivo ignorado" in tela.mensagem.text()
+    assert tela.botao_comparar.isEnabled()
+
+    qtbot.mouseClick(tela.botao_escolher, Qt.MouseButton.LeftButton)  # acrescenta
+    assert tela.area.miniaturas.count() == 3
+    _soltar(tela.area, canecas[:1])  # repetida não entra de novo
+    assert tela.area.miniaturas.count() == 3
+    _capturar_tela(j, "9-comparacao")
+
+    qtbot.mouseClick(tela.botao_limpar, Qt.MouseButton.LeftButton)
+    assert tela.area.miniaturas.count() == 0 and not tela.botao_comparar.isEnabled()
+
+
+def test_comparar_mostra_ranking_com_resumo_e_insere(qtbot, abrir, cfg, fonte_objeto, tmp_path):
+    canecas, foguete, borrada = _imagens_comparacao(tmp_path)
+    j = abrir(cfg, fonte_objeto)
+    _abrir_comparacao(qtbot, j)
+    tela = j.tela_comparacao
+    _soltar(tela.area, [canecas[0], foguete, borrada, canecas[1], canecas[2]])
+    qtbot.mouseClick(tela.botao_comparar, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: j.estado == Estado.RESULTADOS, timeout=TIMEOUT)
+
+    res = j.tela_resultados
+    assert j.pilha.currentWidget() is res
+    assert res.botao_novo.text() == "Nova comparação"
+    resumo = res.resumo.text()
+    assert "Usadas:</b> 3 imagens" in resumo
+    assert "Descartadas por qualidade:</b> 0.png (borrado)" in resumo
+    assert "Diferentes do grupo escolhido:</b> 0.png" in resumo
+    assert res.aviso.isVisible() and res.aviso.text() == MSG_INSERIDO  # catálogo vazio: vira item
+    itens = _itens(cfg, "scan")
+    assert len(itens) == 1 and len(itens[0].imagens) == 3
+    _capturar_tela(j, "10-comparacao-resultado")
+
+    # Nova comparação: volta para a tela de comparação, limpa.
+    qtbot.mouseClick(res.botao_novo, Qt.MouseButton.LeftButton)
+    assert j.pilha.currentWidget() is tela and tela.area.miniaturas.count() == 0
+
+    # As mesmas imagens de novo: já catalogadas (>= 90%), nada é gravado.
+    foto = _foto_dados(cfg)
+    _soltar(tela.area, canecas)
+    qtbot.mouseClick(tela.botao_comparar, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: j.estado == Estado.RESULTADOS, timeout=TIMEOUT)
+    assert res.cartoes()[0].porcentagem >= 90
+    assert not res.aviso.isVisible()
+    assert _foto_dados(cfg) == foto
+
+    # Depois de um scan, o botão volta a ser "Novo scan".
+    qtbot.mouseClick(res.botao_novo, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(tela.botao_voltar, Qt.MouseButton.LeftButton)
+    assert j.pilha.currentWidget() is j.tela_camera and j.estado == Estado.PRONTO
+    _escanear(qtbot, j)
+    _esperar_resultados(qtbot, j)
+    assert res.botao_novo.text() == "Novo scan" and not res.resumo.isVisible()
+
+
+def test_comparar_sem_imagem_valida_continua_na_tela(qtbot, abrir, cfg, fonte_objeto, tmp_path):
+    escura = _arquivos(tmp_path, "cmp-escura", [(ler("rocket.jpg") * 0.05).astype(np.uint8)])
+    j = abrir(cfg, fonte_objeto)
+    _abrir_comparacao(qtbot, j)
+    _soltar(j.tela_comparacao.area, escura)
+    qtbot.mouseClick(j.tela_comparacao.botao_comparar, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: j.tela_comparacao.mensagem.isVisible(), timeout=TIMEOUT)
+    assert j.pilha.currentWidget() is j.tela_comparacao and j.estado == Estado.COMPARACAO
+    texto = j.tela_comparacao.mensagem.text()
+    assert "Nenhuma imagem válida" in texto and "escuro demais" in texto
+    assert _itens(cfg) == []
+    qtbot.mouseClick(j.tela_comparacao.botao_voltar, Qt.MouseButton.LeftButton)
+    assert j.pilha.currentWidget() is j.tela_camera and j.estado == Estado.PRONTO
+
+
+# --- 9.2 câmera opcional e dispositivos ---
+
+
+def _botoes_sem_camera_ok(j):
+    t = j.tela_camera
+    return (
+        not t.botao_escanear.isEnabled()
+        and t.botao_adicionar.isEnabled()
+        and t.botao_comparar.isEnabled()
+        and t.botao_gerenciar.isEnabled()
+    )
+
+
+def test_desativar_e_ativar_a_camera(qtbot, abrir, cfg, fonte_objeto):
+    j = abrir(cfg, fonte_objeto, listar=lambda: [])
+    t = j.tela_camera
+    assert t.botao_camera.text() == "Desativar" and j.camera is not None
+
+    qtbot.mouseClick(t.botao_camera, Qt.MouseButton.LeftButton)
+    assert j.camera is None and not j.camera_ativa
+    assert t.preview.text() == "Câmera desativada"
+    assert t.botao_camera.text() == "Ativar"
+    assert _botoes_sem_camera_ok(j)
+    _capturar_tela(j, "11-camera-desativada")
+
+    qtbot.mouseClick(t.botao_camera, Qt.MouseButton.LeftButton)
+    assert j.camera is not None and j.camera_ativa
+    qtbot.waitUntil(lambda: t.preview.pixmap() is not None and not t.preview.pixmap().isNull(), timeout=TIMEOUT)
+    qtbot.waitUntil(lambda: t.botao_escanear.isEnabled(), timeout=TIMEOUT)
+
+
+def test_trocar_de_dispositivo(qtbot, abrir, cfg, fonte_objeto, fonte_rosto):
+    from scanner.dispositivos import Dispositivo
+
+    lista = [Dispositivo(fonte_objeto, "Câmera A"), Dispositivo(fonte_rosto, "Câmera B")]
+    j = abrir(cfg, fonte_objeto, listar=lambda: lista)
+    t = j.tela_camera
+    assert [t.lista_cameras.itemText(i) for i in range(t.lista_cameras.count())] == ["Câmera A", "Câmera B"]
+    antiga = j.camera
+    t.lista_cameras.activated.emit(1)
+    assert j.fonte_atual == fonte_rosto and j.camera is not antiga
+    assert t.lista_cameras.currentIndex() == 1
+    qtbot.waitUntil(lambda: j.camera.ultimo_frame() is not None, timeout=TIMEOUT)
+    assert np.array_equal(j.camera.ultimo_frame(), cv2.imread(str(sorted(Path(fonte_rosto).iterdir())[0])))
+
+
+def test_dispositivo_que_nao_abre_desativa_a_camera(qtbot, abrir, cfg, fonte_objeto):
+    from scanner.dispositivos import Dispositivo
+
+    lista = [Dispositivo(fonte_objeto, "Câmera A"), Dispositivo(98, "Fantasma")]
+    j = abrir(cfg, fonte_objeto, listar=lambda: lista)
+    j.tela_camera.lista_cameras.activated.emit(1)
+    qtbot.waitUntil(lambda: not j.camera_ativa, timeout=TIMEOUT)
+    t = j.tela_camera
+    assert j.camera is None and t.botao_camera.text() == "Ativar"
+    assert t.mensagem.text().startswith("Câmera não encontrada")
+    assert _botoes_sem_camera_ok(j)
+
+
+def test_nenhum_dispositivo(qtbot, abrir, cfg):
+    j = abrir(cfg, 97, esperar_pronto=False, listar=lambda: [])
+    qtbot.waitUntil(lambda: j.motor_pronto, timeout=TIMEOUT)
+    t = j.tela_camera
+    assert t.lista_cameras.itemText(0) == "Nenhuma câmera encontrada"
+    assert not t.lista_cameras.isEnabled() and not t.botao_camera.isEnabled()
+    assert t.botao_atualizar.isEnabled()
+    assert _botoes_sem_camera_ok(j)
+
+
+def test_atualizar_lista_encontra_camera_nova(qtbot, abrir, cfg, fonte_objeto):
+    from scanner.dispositivos import Dispositivo
+
+    conectadas = []
+    j = abrir(cfg, 97, esperar_pronto=False, listar=lambda: list(conectadas))
+    qtbot.waitUntil(lambda: j.motor_pronto, timeout=TIMEOUT)
+    conectadas.append(Dispositivo(fonte_objeto, "Webcam nova"))
+    qtbot.mouseClick(j.tela_camera.botao_atualizar, Qt.MouseButton.LeftButton)
+    t = j.tela_camera
+    assert t.lista_cameras.itemText(0) == "Webcam nova" and t.botao_camera.isEnabled()
+    assert "1 câmera encontrada" in t.mensagem.text()
+    qtbot.mouseClick(t.botao_camera, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: t.botao_escanear.isEnabled(), timeout=TIMEOUT)
+
+
+def test_controles_de_camera_travados_durante_o_scan(qtbot, abrir, cfg, fonte_objeto):
+    j = abrir(cfg, fonte_objeto, listar=lambda: [])
+    t = j.tela_camera
+    _escanear(qtbot, j)
+    assert not t.lista_cameras.isEnabled() and not t.botao_camera.isEnabled()
+    assert not t.botao_atualizar.isEnabled()
+    _esperar_resultados(qtbot, j)
+    qtbot.mouseClick(j.tela_resultados.botao_novo, Qt.MouseButton.LeftButton)
+    assert t.botao_camera.isEnabled() and t.botao_atualizar.isEnabled()
+
+
+def test_lembra_a_ultima_escolha(qtbot, abrir, cfg, tmp_path):
+    from scanner.config import carregar_config
+    from scanner.dispositivos import Dispositivo
+
+    arquivo = tmp_path / "config.toml"
+    arquivo.write_text("[camera]\nfonte = 5\nativa = false\n", encoding="utf-8")
+    cfg.caminho = arquivo
+    cfg.camera.fonte, cfg.camera.ativa = 5, False
+    lista = [Dispositivo(5, "Câmera A"), Dispositivo(6, "Câmera B")]
+
+    # Câmera desativada: trocar de dispositivo não abre nenhum, só grava a escolha.
+    j = abrir(cfg, 5, esperar_pronto=False, listar=lambda: lista, salvar_camera=True)
+    qtbot.waitUntil(lambda: j.motor_pronto, timeout=TIMEOUT)
+    assert j.camera is None and j.tela_camera.preview.text() == "Câmera desativada"
+    j.tela_camera.lista_cameras.activated.emit(1)
+    assert j.camera is None
+    salvo = carregar_config(arquivo).camera
+    assert (salvo.fonte, salvo.ativa) == (6, False)
+    j.close()
+
+    # Reabrir: a mesma escolha, ainda desativada.
+    novo = carregar_config(arquivo)
+    novo.catalogo.diretorio_dados = cfg.catalogo.diretorio_dados
+    j2 = abrir(novo, novo.camera.fonte, esperar_pronto=False, listar=lambda: lista, salvar_camera=True)
+    qtbot.waitUntil(lambda: j2.motor_pronto, timeout=TIMEOUT)
+    assert j2.tela_camera.lista_cameras.currentText() == "Câmera B (câmera 6)"
+    assert j2.camera is None and j2.tela_camera.preview.text() == "Câmera desativada"
+    assert _botoes_sem_camera_ok(j2)
+
+
+def test_dispositivo_guardado_ausente_abre_desativada(qtbot, abrir, cfg):
+    from scanner.dispositivos import Dispositivo
+
+    cfg.camera.ativa = True
+    j = abrir(cfg, 7, esperar_pronto=False, listar=lambda: [Dispositivo(5, "Câmera A")])
+    qtbot.waitUntil(lambda: j.motor_pronto, timeout=TIMEOUT)
+    assert j.camera is None and not j.camera_ativa
+    assert j.tela_camera.mensagem.text().startswith("Câmera não encontrada")
+    assert j.tela_camera.botao_camera.text() == "Ativar"
+
+
+def test_testes_nao_gravam_no_config_do_projeto(qtbot, abrir, cfg, fonte_objeto):
+    antes = (RAIZ / "config.toml").read_text(encoding="utf-8")
+    j = abrir(cfg, fonte_objeto, listar=lambda: [])
+    qtbot.mouseClick(j.tela_camera.botao_camera, Qt.MouseButton.LeftButton)
+    assert (RAIZ / "config.toml").read_text(encoding="utf-8") == antes

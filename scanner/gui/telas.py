@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import html
+from pathlib import Path
+
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
@@ -15,6 +18,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QDialog,
+    QComboBox,
     QDialogButtonBox,
     QFrame,
     QGridLayout,
@@ -184,9 +188,31 @@ class TelaCamera(QWidget):
     escanear = Signal()
     gerenciar = Signal()
     adicionar = Signal()
+    comparar = Signal()
+    camera_escolhida = Signal(int)  # posição na lista de dispositivos
+    alternar_camera = Signal()
+    atualizar_cameras = Signal()
 
     def __init__(self, fracao_moldura: float, parent=None):
         super().__init__(parent)
+        # Barra de câmera: dispositivo, ativar/desativar e atualizar lista.
+        rotulo_camera = QLabel("Câmera")
+        rotulo_camera.setObjectName("subtitulo")
+        self.lista_cameras = QComboBox()
+        self.lista_cameras.setMinimumWidth(260)
+        self.lista_cameras.activated.connect(self.camera_escolhida)
+        self.botao_camera = QPushButton("Desativar")
+        self.botao_camera.setObjectName("alternarCamera")
+        self.botao_camera.clicked.connect(self.alternar_camera)
+        self.botao_atualizar = QPushButton("Atualizar lista")
+        self.botao_atualizar.setToolTip("Procura de novo as câmeras conectadas")
+        self.botao_atualizar.clicked.connect(self.atualizar_cameras)
+        barra_camera = QHBoxLayout()
+        barra_camera.addWidget(rotulo_camera)
+        barra_camera.addWidget(self.lista_cameras)
+        barra_camera.addWidget(self.botao_camera)
+        barra_camera.addWidget(self.botao_atualizar)
+        barra_camera.addStretch()
         self.preview = Preview(fracao_moldura)
         self.mensagem = QLabel("Carregando modelos…")
         self.mensagem.setObjectName("mensagem")
@@ -209,16 +235,24 @@ class TelaCamera(QWidget):
         )
         self.botao_adicionar.setEnabled(False)
         self.botao_adicionar.clicked.connect(self.adicionar)
+        self.botao_comparar = QPushButton("Comparar imagens")
+        self.botao_comparar.setToolTip(
+            "Compare dois objetos a partir de arquivos de imagem, sem usar a câmera"
+        )
+        self.botao_comparar.setEnabled(False)
+        self.botao_comparar.clicked.connect(self.comparar)
 
         botoes = QHBoxLayout()
         botoes.addWidget(self.botao_gerenciar)
         botoes.addWidget(self.botao_adicionar)
+        botoes.addWidget(self.botao_comparar)
         botoes.addStretch()
         botoes.addWidget(self.botao_escanear)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(10)
+        layout.addLayout(barra_camera)
         layout.addWidget(self.preview, 1)
         layout.addWidget(self.mensagem)
         layout.addWidget(self.progresso)
@@ -233,7 +267,33 @@ class TelaCamera(QWidget):
     def sem_camera(self, motivo: str) -> None:
         self.preview.clear()
         self.preview.setText("Câmera não encontrada")
-        self.info(f"Câmera não encontrada. Conecte uma webcam e reabra o aplicativo.\n({motivo})", True)
+        self.info(
+            "Câmera não encontrada. Conecte uma câmera e clique em “Atualizar lista”, ou continue "
+            f"sem câmera: adicionar, comparar e gerenciar funcionam normalmente.\n({motivo})",
+            True,
+        )
+
+    def camera_desativada(self) -> None:
+        self.preview.clear()
+        self.preview.setText("Câmera desativada")
+        self.info(
+            "Câmera desativada. Adicionar imagens, comparar imagens e gerenciar itens "
+            "continuam disponíveis."
+        )
+
+    def mostrar_dispositivos(self, dispositivos, atual, ativa: bool) -> None:
+        """Preenche a lista, seleciona `atual` (fonte) e ajusta o botão Ativar/Desativar."""
+        self.lista_cameras.blockSignals(True)
+        self.lista_cameras.clear()
+        if dispositivos:
+            for d in dispositivos:
+                self.lista_cameras.addItem(d.rotulo, d.fonte)
+            fontes = [d.fonte for d in dispositivos]
+            self.lista_cameras.setCurrentIndex(fontes.index(atual) if atual in fontes else 0)
+        else:
+            self.lista_cameras.addItem("Nenhuma câmera encontrada")
+        self.lista_cameras.blockSignals(False)
+        self.botao_camera.setText("Desativar" if ativa else "Ativar")
 
     def progresso_captura(self, decorrido_ms: int, total_ms: int) -> None:
         self.progresso.setRange(0, total_ms)
@@ -300,6 +360,11 @@ class TelaResultados(QWidget):
         self.vazio.setObjectName("vazio")
         self.vazio.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.vazio.hide()
+        self.resumo = QLabel()
+        self.resumo.setObjectName("detalhes")
+        self.resumo.setWordWrap(True)
+        self.resumo.setTextFormat(Qt.TextFormat.RichText)
+        self.resumo.hide()
         self._grade_widget = QWidget()
         self.grade = QGridLayout(self._grade_widget)
         self.grade.setSpacing(14)
@@ -315,11 +380,28 @@ class TelaResultados(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(12)
-        layout.addLayout(_cabecalho("Itens mais parecidos", "Ordenados pela similaridade com o seu scan."))
+        cabecalho = _cabecalho("Itens mais parecidos", "")
+        self.subtitulo = cabecalho.itemAt(1).widget()
+        layout.addLayout(cabecalho)
         layout.addWidget(self.aviso)
+        layout.addWidget(self.resumo)
         layout.addWidget(self.vazio)
         layout.addWidget(self._grade_widget, 1, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         layout.addLayout(rodape)
+        self.origem = "scan"
+        self.definir_origem("scan")
+
+    def definir_origem(self, origem: str, resumo: str = "") -> None:
+        """'scan' ou 'comparacao': muda o subtítulo, o botão e o resumo exibido."""
+        self.origem = origem
+        if origem == "comparacao":
+            self.subtitulo.setText("Ordenados pela similaridade com as imagens comparadas.")
+            self.botao_novo.setText("Nova comparação")
+        else:
+            self.subtitulo.setText("Ordenados pela similaridade com o seu scan.")
+            self.botao_novo.setText("Novo scan")
+        self.resumo.setText(resumo)
+        self.resumo.setVisible(bool(resumo))
 
     def cartoes(self) -> list[CartaoResultado]:
         return [
@@ -450,3 +532,200 @@ class DialogoConsentimento(DialogoConfirmacao):
         self.setWindowTitle("Consentimento")
         self.botao_cancelar.setText("Recusar")
         self.setMinimumWidth(480)
+
+
+def _imagens(n: int) -> str:
+    return f"{n} imagem" if n == 1 else f"{n} imagens"
+
+
+def eh_imagem(caminho) -> bool:
+    from scanner.captura import EXTENSOES_IMAGEM
+
+    return Path(caminho).suffix.lower() in EXTENSOES_IMAGEM
+
+
+class AreaSoltar(QFrame):
+    """Área que recebe imagens arrastadas e mostra as miniaturas."""
+
+    soltas = Signal(list, int)  # caminhos de imagem, quantidade de arquivos ignorados
+    MINIATURA = 84
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("areaSoltar")
+        self.setAcceptDrops(True)
+        self.setProperty("arrastando", False)
+        self.dica = QLabel("Arraste para cá uma ou mais imagens de um mesmo objeto")
+        self.dica.setObjectName("dicaSoltar")
+        self.dica.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.miniaturas = QListWidget()
+        self.miniaturas.setViewMode(QListWidget.ViewMode.IconMode)
+        self.miniaturas.setIconSize(QSize(self.MINIATURA, self.MINIATURA))
+        self.miniaturas.setGridSize(QSize(self.MINIATURA + 18, self.MINIATURA + 32))
+        self.miniaturas.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.miniaturas.setMovement(QListWidget.Movement.Static)
+        self.miniaturas.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.miniaturas.setAcceptDrops(False)
+        self.miniaturas.hide()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.addWidget(self.dica, 1)
+        layout.addWidget(self.miniaturas, 1)
+
+    def _destacar(self, valor: bool) -> None:
+        self.setProperty("arrastando", valor)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def dragEnterEvent(self, evento) -> None:
+        urls = evento.mimeData().urls() if evento.mimeData().hasUrls() else []
+        if any(u.isLocalFile() and eh_imagem(u.toLocalFile()) for u in urls):
+            evento.acceptProposedAction()
+            self._destacar(True)
+        else:
+            evento.ignore()
+
+    def dragLeaveEvent(self, evento) -> None:
+        self._destacar(False)
+
+    def dropEvent(self, evento) -> None:
+        self._destacar(False)
+        arquivos = [u.toLocalFile() for u in evento.mimeData().urls() if u.isLocalFile()]
+        imagens = [a for a in arquivos if eh_imagem(a)]
+        evento.acceptProposedAction()
+        self.soltas.emit(imagens, len(arquivos) - len(imagens))
+
+    def mostrar(self, caminhos) -> None:
+        self.miniaturas.clear()
+        for c in caminhos:
+            item = QListWidgetItem(QIcon(pixmap_arredondado(c, self.MINIATURA, 8)), Path(c).name)
+            item.setToolTip(str(c))
+            self.miniaturas.addItem(item)
+        self.miniaturas.setVisible(bool(caminhos))
+        self.dica.setVisible(not caminhos)
+
+
+class TelaComparacao(QWidget):
+    """Escolha de uma ou mais imagens de um mesmo objeto para buscar no catálogo."""
+
+    escolher = Signal()
+    comparar = Signal()
+    voltar = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.caminhos: list[str] = []
+        self.area = AreaSoltar()
+        self.area.soltas.connect(self._soltas)
+        self.contagem = QLabel()
+        self.contagem.setObjectName("subtitulo")
+        self.botao_escolher = QPushButton("Escolher imagens…")
+        self.botao_escolher.clicked.connect(self.escolher)
+        self.botao_limpar = QPushButton("Limpar")
+        self.botao_limpar.clicked.connect(self.limpar)
+        self.mensagem = QLabel()
+        self.mensagem.setObjectName("mensagem")
+        self.mensagem.setWordWrap(True)
+        self.mensagem.setTextFormat(Qt.TextFormat.RichText)
+        self.mensagem.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progresso = QProgressBar()
+        self.progresso.setTextVisible(False)
+        self.progresso.setRange(0, 0)
+        self.progresso.hide()
+        self.botao_voltar = QPushButton("Voltar")
+        self.botao_voltar.clicked.connect(self.voltar)
+        self.botao_comparar = QPushButton("Comparar")
+        self.botao_comparar.setObjectName("primario")
+        self.botao_comparar.setMinimumWidth(160)
+        self.botao_comparar.clicked.connect(self.comparar)
+
+        acoes = QHBoxLayout()
+        acoes.addWidget(self.contagem)
+        acoes.addStretch()
+        acoes.addWidget(self.botao_limpar)
+        acoes.addWidget(self.botao_escolher)
+        botoes = QHBoxLayout()
+        botoes.addWidget(self.botao_voltar)
+        botoes.addStretch()
+        botoes.addWidget(self.botao_comparar)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+        layout.addLayout(
+            _cabecalho(
+                "Comparar imagens com o catálogo",
+                "Use uma ou mais fotos de um mesmo objeto. Fotos ruins ou muito diferentes das "
+                "demais são descartadas; se o objeto for novo (abaixo de 90%), ele entra no catálogo.",
+            )
+        )
+        layout.addLayout(acoes)
+        layout.addWidget(self.area, 1)
+        layout.addWidget(self.mensagem)
+        layout.addWidget(self.progresso)
+        layout.addLayout(botoes)
+        self._ocupado = False
+        self.limpar()
+
+    def _soltas(self, imagens: list, ignorados: int) -> None:
+        self.adicionar(imagens)
+        if ignorados:
+            self.info(f"{ignorados} arquivo{'' if ignorados == 1 else 's'} ignorado{'' if ignorados == 1 else 's'}: não {'é' if ignorados == 1 else 'são'} imagem.", erro=True)
+
+    def adicionar(self, caminhos) -> None:
+        novos = [str(c) for c in caminhos if eh_imagem(c) and str(c) not in self.caminhos]
+        self.caminhos.extend(novos)
+        self.area.mostrar(self.caminhos)
+        self.info("")
+        self._atualizar()
+
+    def limpar(self) -> None:
+        self.caminhos = []
+        self.area.mostrar([])
+        self.info("")
+        self._atualizar()
+
+    def info(self, texto: str, erro: bool = False) -> None:
+        self.mensagem.setText(texto)
+        self.mensagem.setVisible(bool(texto))
+        self.mensagem.setProperty("erro", erro)
+        self.mensagem.style().unpolish(self.mensagem)
+        self.mensagem.style().polish(self.mensagem)
+
+    def _atualizar(self) -> None:
+        n = len(self.caminhos)
+        self.contagem.setText("Nenhuma imagem escolhida" if n == 0 else f"{_imagens(n)} escolhida{'' if n == 1 else 's'}")
+        livre = not self._ocupado
+        self.botao_comparar.setEnabled(livre and n > 0)
+        self.botao_limpar.setEnabled(livre and n > 0)
+        self.botao_escolher.setEnabled(livre)
+        self.botao_voltar.setEnabled(livre)
+        self.area.setAcceptDrops(livre)
+
+    def processando(self) -> None:
+        self._ocupado = True
+        self.info("")
+        self.progresso.show()
+        self._atualizar()
+
+    def ocioso(self) -> None:
+        self._ocupado = False
+        self.progresso.hide()
+        self._atualizar()
+
+
+def resumo_busca(r) -> str:
+    """Texto do resumo da validação das imagens comparadas."""
+    partes = [f"<b>Usadas:</b> {_imagens(len(r.usadas))}."]
+    if r.descartadas_qualidade:
+        lista = "; ".join(f"{html.escape(a)} ({html.escape(m)})" for a, m in r.descartadas_qualidade)
+        partes.append(f"<b>Descartadas por qualidade:</b> {lista}.")
+    if r.fora_do_grupo:
+        lista = ", ".join(html.escape(a) for a in r.fora_do_grupo)
+        partes.append(f"<b>Diferentes do grupo escolhido:</b> {lista}.")
+    return "<br>".join(partes)
+
+
+def mensagem_sem_validas(r) -> str:
+    lista = "<br>".join(f"{html.escape(a)}: {html.escape(m)}" for a, m in r.descartadas_qualidade)
+    return f"Nenhuma imagem válida, nada foi comparado.<br>{lista}"

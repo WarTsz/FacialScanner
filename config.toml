@@ -4,6 +4,8 @@
 [camera]
 # Índice da webcam (0 = primeira), caminho de um vídeo ou de uma pasta de imagens.
 fonte = 0
+# A câmera começa ativa? Guardado pelo aplicativo junto com a fonte escolhida.
+ativa = true
 
 [captura]
 duracao_s = 5.0
@@ -31,6 +33,10 @@ imagens_por_item = 3
 top = 10
 # Similaridade (%) do 1º colocado a partir da qual o scan é descartado.
 limiar_insercao = 90.0
+
+[comparacao]
+# Semelhança mínima (%) para duas imagens da comparação contarem como o mesmo objeto.
+similaridade_minima = 50.0
 
 [calibracao]
 # Âncoras do mapeamento cosseno -> %. Valores provisórios; rode `python -m scanner calibrar`.

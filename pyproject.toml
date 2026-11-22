@@ -26,6 +26,9 @@ scanner = "scanner.cli:main"
 [tool.setuptools.packages.find]
 include = ["scanner*"]
 
+[tool.setuptools.package-data]
+"scanner.gui" = ["recursos/*.png", "recursos/*.svg"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

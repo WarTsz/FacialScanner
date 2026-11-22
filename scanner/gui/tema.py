@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from string import Template
 
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QColor, QIcon, QPalette
+
+RECURSOS = Path(__file__).parent / "recursos"
+TAMANHOS_ICONE = (16, 24, 32, 48, 64, 128, 256)
 
 CORES = {
     "fundo": "#1e1f22",  # base da janela
@@ -98,6 +103,32 @@ QProgressBar::chunk {
 }
 QProgressBar#similaridade { max-height: 4px; min-height: 4px; background: $borda; }
 
+/* lista de câmeras */
+QComboBox {
+    background: $botao; color: $texto; border: 1px solid $borda; border-radius: 8px;
+    padding: 7px 12px; min-height: 22px;
+}
+QComboBox:hover { border: 1px solid $ciano; }
+QComboBox:disabled { background: $superficie; color: $desabilitado; }
+QComboBox::drop-down { border: none; width: 26px; }
+QComboBox::down-arrow { image: url($seta); width: 12px; height: 12px; }
+QComboBox QAbstractItemView {
+    background: $superficie; color: $texto; border: 1px solid $borda;
+    selection-background-color: rgba(255, 121, 198, 0.22); selection-color: $branco; outline: 0;
+}
+
+/* comparação de imagens */
+QFrame#areaSoltar { background: $superficie; border: 2px dashed $borda; border-radius: 14px; }
+QFrame#areaSoltar[arrastando="true"] { border: 2px dashed $ciano; background: rgba(92, 225, 230, 0.06); }
+QFrame#areaSoltar QListWidget { background: transparent; border: none; }
+QLabel#dicaSoltar { color: $texto_mudo; font-size: 16px; }
+QFrame#lado { background: $superficie; border: 1px solid $borda; border-radius: 12px; }
+QFrame#lado QListWidget { background: $elevado; border: none; border-radius: 8px; padding: 6px; }
+QFrame#resultadoComparacao { background: $elevado; border: 1px solid $borda; border-radius: 12px; }
+QLabel#porcentagemGrande { font-size: 44px; font-weight: 800; min-width: 130px; }
+QLabel#interpretacao { color: $branco; font-size: 15px; font-weight: 600; }
+QLabel#detalhes { color: $texto_suave; font-size: 13px; }
+
 /* lista de remoção */
 QListWidget {
     background: $superficie; border: 1px solid $borda; border-radius: 12px;
@@ -125,7 +156,7 @@ QToolTip { background: $barra; color: $texto; border: 1px solid $borda; padding:
 """
 )
 
-ESTILO = _QSS.substitute(CORES)
+ESTILO = _QSS.substitute(CORES, seta=(RECURSOS / "seta.svg").as_posix())
 
 
 def paleta() -> QPalette:
@@ -158,7 +189,18 @@ def paleta() -> QPalette:
     return p
 
 
+def icone_app() -> QIcon:
+    """Ícone do aplicativo (janela, painel e alternador de janelas) em vários tamanhos."""
+    icone = QIcon()
+    for n in TAMANHOS_ICONE:
+        arquivo = RECURSOS / f"icone-{n}.png"
+        if arquivo.exists():
+            icone.addFile(str(arquivo), QSize(n, n))
+    return icone
+
+
 def aplicar_tema(app) -> None:
     app.setStyle("Fusion")
     app.setPalette(paleta())
     app.setStyleSheet(ESTILO)
+    app.setWindowIcon(icone_app())

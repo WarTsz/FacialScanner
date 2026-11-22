@@ -2,7 +2,7 @@
 
 ## Contexto
 
-Projeto novo, sem código. A motivação está em `proposal.md` e os comportamentos esperados estão nas specs (`captura-scan`, `ranking-similaridade`, `catalogo-itens`, `interface-scanner`). Restrições que moldam o desenho:
+Projeto novo, sem código. A motivação está em `proposal.md` e os comportamentos esperados estão nas specs (`captura-scan`, `ranking-similaridade`, `catalogo-itens`, `interface-scanner`, `comparacao-imagens`, `camera-dispositivos`). Restrições que moldam o desenho:
 
 - Aplicativo desktop, executado localmente, com webcam e sem servidor.
 - Backend majoritariamente em Python.
@@ -133,7 +133,17 @@ Os frames e vetores de um scan vivem só em memória. Se o scan não for inserid
 A tela de espera ganha o botão "Adicionar imagens", que abre um `QFileDialog` com seleção múltipla. Os arquivos vão para o mesmo worker do scan (D15). Cada um passa pelo pipeline do seed (D14): filtro de qualidade e recorte com a imagem inteira como "moldura", porque não há moldura na tela. As imagens válidas viram um único item gravado por `Catalogo.inserir_scan`, igual a um scan: origem "scan", nome `item-NNNNNN`, arquivos em `data/images/<nome>/<n>.jpg` e vetores no SQLite e na matriz em memória. Assim o item aparece na tela de remoção como qualquer item criado pelo aplicativo. Todas as imagens válidas são guardadas (não só as k melhores), porque o usuário as escolheu uma a uma. Não há regra dos 90% nem consentimento: é uma inserção deliberada de quem opera o aplicativo.
 *Alternativa:* uma origem nova, "manual". Ela exigiria migrar a restrição `CHECK` da tabela `itens` nos bancos existentes, e a tela de remoção teria de listar duas origens, sem ganho para o fluxo atual.
 
-## Riscos / Trade-offs
+### D18. Comparação de imagens com o catálogo
+A tela de espera ganha o botão "Comparar imagens", que abre uma tela onde o usuário arrasta imagens (drag and drop) ou as escolhe por um `QFileDialog` de seleção múltipla. Os caminhos vão para o mesmo worker do scan (D15). O motor processa cada arquivo pelo pipeline da adição manual (D17): qualidade e recorte com a imagem inteira como moldura, valendo qualquer rosto.
+As imagens válidas são agrupadas em ordem, por um agrupamento de líder com centroide: cada vetor entra no grupo, entre os já formados, cuja média normalizada seja a mais parecida, desde que a semelhança na escala calibrada (D12) atinja o mínimo de `[comparacao] similaridade_minima` (padrão 50%); senão, abre um grupo novo. Vence o grupo com mais imagens; em empate, o formado primeiro. A média normalizada do grupo vencedor é buscada no índice como o vetor de um scan (D11), e a regra dos 90% decide a inserção: abaixo disso, todas as imagens do grupo viram um item por `Catalogo.inserir_scan`, sem consentimento, por decisão do produto. Com 90% ou mais, nada é gravado.
+O ranking aparece na mesma tela de resultados do scan, com um resumo (usadas, descartadas por qualidade e descartadas por estarem fora do grupo).
+*Alternativas:* agrupamento por componentes conexas (encadeia imagens pouco parecidas por intermediárias) e k-médias (exige saber o número de grupos). O agrupamento de líder é simples, previsível e respeita a ordem das imagens, que define o desempate.
+
+### D19. Câmera opcional e detecção de dispositivos
+A câmera vira opcional. O módulo `dispositivos` lista os dispositivos de vídeo: no Linux, lê `/sys/class/video4linux`, usa o nome do dispositivo e mantém só os nós de captura (atributo `index` igual a 0; os nós de metadados de webcams UVC têm `index` 1); em outros sistemas, testa os índices de 0 a 9 com o OpenCV. A tela de espera ganha uma barra com a lista de dispositivos, um botão Ativar/Desativar e um botão para atualizar a lista. Ativar cria a thread da câmera (D3) para o dispositivo escolhido; desativar ou trocar encerra a thread e libera o dispositivo. Durante o scan, os controles ficam desabilitados, e sem câmera ativa o "Escanear" fica bloqueado.
+A escolha (índice do dispositivo e estado) é gravada em `[camera]` no `config.toml` (`fonte` e `ativa`), preservando o resto do arquivo, e lida na abertura. Se o dispositivo guardado não aparecer na lista, o aplicativo abre com a câmera desativada. Uma fonte passada por `--camera` (vídeo ou pasta de imagens) entra na lista como uma opção a mais e não é gravada.
+
+## Riscos / Trade-offs## Riscos / Trade-offs
 
 - [O DINOv2 mede semelhança visual, não identidade: duas pessoas diferentes com luz e cabelo parecidos podem pontuar alto] → Aceito por design, já que o produto é de semelhança. O recorte justo do rosto (D5) reduz a influência do fundo.
 - [Calibração mal ajustada torna a regra dos 90% inútil: tudo entra no catálogo ou nada entra] → Script de calibração com relatório da distribuição dos pares e âncoras configuráveis. Recalibrar depois de mudar o modelo.
@@ -143,6 +153,8 @@ A tela de espera ganha o botão "Adicionar imagens", que abre um `QFileDialog` c
 - [Qualquer pessoa com acesso à máquina pode remover itens de scan] → Aceito no escopo local. Restringir o acesso exigiria mudar a spec `interface-scanner`.
 - [Os pesos do modelo são baixados no primeiro uso, e o aplicativo não funciona offline na primeira execução] → Comando de preparação que baixa e guarda os pesos localmente antes do uso.
 - [Imagens de rosto adicionadas manualmente não pedem consentimento (D17)] → Aceito por decisão do produto: a adição é feita por quem opera o aplicativo, as imagens ficam só nesta máquina e o item pode ser removido na tela de remoção.
+- [Imagens de rosto inseridas pela comparação não pedem consentimento (D18)] → Aceito por decisão do produto: quem escolhe as imagens é quem opera o aplicativo, os dados ficam só nesta máquina e o item pode ser removido na tela de remoção.
+- [O índice de um dispositivo pode mudar quando câmeras são conectadas em outra ordem (D19)] → A lista mostra o nome de cada dispositivo e a troca é feita pela interface; se o índice guardado não existir, o aplicativo abre com a câmera desativada.
 - [LGPD: imagens de rosto de usuários] → Consentimento explícito com texto claro, armazenamento só local, remoção definitiva e nenhum frame persistido sem inserção (D16).
 
 ## Plano de implantação
